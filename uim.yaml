@@ -1,0 +1,18 @@
+Name: uim 
+Summary: User Mode Initialization Manager
+Version: 0.1
+Release: 1
+Group: System/Daemons
+License: GPLv2+
+URL: http://dev.omapzoom.org
+Description: |
+    User Mode Init manager - For TI shared transport drivers    
+Sources:
+    - uim.tgz
+Configure: configure
+Files:
+    - "%{_bindir}/uim"
+
+
+
+
