@@ -499,8 +499,8 @@ int main(int argc, char *argv[])
 		}
 	} else {
 		UIM_ERR(" Invalid arguments");
-		UIM_ERR(" Usage: uim [Uart device] [Baud rate] \
-				[Flow control] [Line discipline]");
+		UIM_ERR(" Usage: uim [Uart device] [Baud rate]" \
+			" [Flow control] [Line discipline]");
 		return -1;
 	}
 
