@@ -46,7 +46,7 @@ int dev_fd;
 
 /* Maintains the state of N_TI_WL line discipline installation*/
 unsigned char st_state = INSTALL_N_TI_WL;
-unsigned char prev_st_state = UNINSTALL_N_TI_WL;
+unsigned char prev_st_state = INSTALL_N_TI_WL;
 
 struct rfkill_event {
 uint32_t idx;
@@ -55,7 +55,7 @@ uint8_t  op;
 uint8_t  soft, hard;
 } __packed;
 struct rfkill_event rf_event;
-int rfkill_idx;
+int 	rfkill_idx;
 
 /*****************************************************************************/
 #ifdef UIM_DEBUG
@@ -162,7 +162,7 @@ static int read_command_complete(int fd, unsigned short opcode)
 	/* Response should be an event packet */
 	if (resp.uart_prefix != HCI_EVENT_PKT) {
 		UIM_ERR
-			(" Err in response: not an event packet, but 0x%02x!",
+			(" Error in response: not an event packet, but 0x%02x!",
 			 resp.uart_prefix);
 		return -1;
 	}
@@ -171,20 +171,20 @@ static int read_command_complete(int fd, unsigned short opcode)
 	if (resp.hci_hdr.evt != EVT_CMD_COMPLETE) {
 		/* event must be event-complete */
 		UIM_ERR
-			(" Err in response: not a cmdcomplete evt,but 0x%02x!",
+			(" Error in response: not a cmd-complete event,but 0x%02x!",
 			 resp.hci_hdr.evt);
 		return -1;
 	}
 
 	if (resp.hci_hdr.plen < 4) {
 		/* plen >= 4 for EVT_CMD_COMPLETE */
-		UIM_ERR(" Err in response: plen is not >= 4, but 0x%02x!",
+		UIM_ERR(" Error in response: plen is not >= 4, but 0x%02x!",
 				resp.hci_hdr.plen);
 		return -1;
 	}
 
 	if (resp.cmd_complete.opcode != (unsigned short)opcode) {
-		UIM_ERR(" Err in response: opcode is 0x%04x, not 0x%04x!",
+		UIM_ERR(" Error in response: opcode is 0x%04x, not 0x%04x!",
 				resp.cmd_complete.opcode, opcode);
 		return -1;
 	}
@@ -281,30 +281,19 @@ static int set_custom_baud_rate()
 }
 
 /*
- * Handling the Signals sent from the Kernel Init Manager.
- * After receiving the signals, configure the baud rate, flow
- * control and Install the N_TI_WL line discipline
+ * After receiving the indication from rfkill subsystem, configure the
+ * baud rate, flow control and Install the N_TI_WL line discipline
  */
-int st_sig_handler(int signo)
+int st_uart_config()
 {
 	int ldisc, len;
 	struct uim_speed_change_cmd cmd;
 
 	UIM_START_FUNC();
 
-	/* Raise a signal after when UIM is killed.
-	 * This will exit UIM, and remove the inserted kernel
-	 * modules
-	 */
-	if (signo == SIGINT) {
-		UIM_DBG(" Exiting. . .");
-		exiting = 1;
-		return -1;
-	}
-
-	/* Install the line discipline when the signal is received by UIM.
+	/* Install the line discipline when the rfkill signal is received by UIM.
 	 * Whenever the first protocol tries to register with the ST core, the
-	 * ST KIM will send a signal SIGUSR2 to the UIM to install the N_TI_WL
+	 * ST KIM will inform the UIM through rfkill subsystem to install the N_TI_WL
 	 * line discipline and do the host side UART configurations.
 	 *
 	 * On failure, ST KIM's line discipline installation times out, and the
@@ -327,7 +316,7 @@ int st_sig_handler(int signo)
 			return -1;
 		}
 
-		fcntl(dev_fd, F_SETFL, fcntl(dev_fd, F_GETFL) | O_NONBLOCK);
+		fcntl(dev_fd, F_SETFL,fcntl(dev_fd, F_GETFL) | O_NONBLOCK);
 		/* Set only thecustom baud rate */
 		if (cust_baud_rate) {
 
@@ -389,10 +378,17 @@ int st_sig_handler(int signo)
 	prev_st_state = st_state;
 	return 0;
 }
-
 int remove_modules()
 {
 	int err = 0;
+
+	UIM_VER(" Removing bt_drv ");
+	if (system("rmmod bt_drv") != 0) {
+		UIM_ERR(" Error removing bt_drv module");
+		err = -1;
+	} else {
+		UIM_DBG(" Removed bt_drv module");
+	}
 
 	/*Remove the Shared Transport */
 	UIM_VER(" Removing st_drv ");
@@ -406,7 +402,6 @@ int remove_modules()
 
 	return err;
 }
-
 
 int change_rfkill_perms(void)
 {
@@ -438,7 +433,7 @@ int change_rfkill_perms(void)
 		UIM_ERR("change mode failed for %s (%d)\n", path, errno);
 		return -1;
 	}
-	UIM_DBG("changed permissions for %s(%d)\n", path, sz);
+	UIM_DBG("changed permissions for %s(%d) \n", path, sz);
 	/* end of change_perms */
 
 	return 0;
@@ -469,53 +464,43 @@ int main(int argc, char *argv[])
 		 * the custom baud rate and default baud rate
 		 */
 		switch (uart_baud_rate) {
-		case 115200:
-			UIM_VER(" Baudrate 115200");
-			break;
-		case 9600:
-		case 19200:
-		case 38400:
-		case 57600:
-		case 230400:
-		case 460800:
-		case 500000:
-		case 576000:
-		case 921600:
-		case 1000000:
-		case 1152000:
-		case 1500000:
-		case 2000000:
-		case 2500000:
-		case 3000000:
-		case 3500000:
-		case 3686400:
-		case 4000000:
-			cust_baud_rate = uart_baud_rate;
-			UIM_VER(" Baudrate %d", cust_baud_rate);
-			break;
-		default:
-			UIM_ERR(" Inavalid Baud Rate");
-			break;
+			case 115200:
+				UIM_VER(" Baudrate 115200");
+				break;
+			case 9600:
+			case 19200:
+			case 38400:
+			case 57600:
+			case 230400:
+			case 460800:
+			case 500000:
+			case 576000:
+			case 921600:
+			case 1000000:
+			case 1152000:
+			case 1500000:
+			case 2000000:
+			case 2500000:
+			case 3000000:
+			case 3500000:
+			case 3686400:
+			case 4000000:
+				cust_baud_rate = uart_baud_rate;
+				UIM_VER(" Baudrate %d", cust_baud_rate);
+				break;
+			default:
+				UIM_ERR(" Inavalid Baud Rate");
+				break;
 		}
 	} else {
-		UIM_ERR(" Invalid arguments");
-		UIM_ERR(" Usage: uim [Uart device] [Baud rate]" \
-			" [Flow control] [Line discipline]");
+		UIM_ERR(" Invalid arguements");
+		UIM_ERR(" Usage: uim [Uart device] [Baud rate] [Flow control] [Line discipline]");
 		return -1;
 	}
 
-	if (system("modprobe st_drv") != 0) {
-		UIM_ERR(" Error inserting st_drv module");
-		return -1;
-	} else {
-		UIM_DBG(" Inserted st_drv module");
-	}
-
-
-	if (change_rfkill_perms() < 0) {
-		/* possible error condition */
-		UIM_ERR("rfkill not enabled in st_drv - \
-				BT on from UI might fail\n");
+	if (uname (&name) == -1) {
+	   UIM_ERR("cannot get kernel release name");
+	   return -1;
 	}
 
 	st_fd = open("/dev/rfkill", O_RDONLY);
@@ -541,18 +526,20 @@ RE_POLL:
 	}
 	if (!exiting) {
 		err = read(st_fd, &rf_event, sizeof(rf_event));
-		UIM_DBG("rf_event: %d, %d, %d, %d, %d\n", rf_event.idx,
+		UIM_DBG("rf_event: idx %d, type %d, op %d, hard %d, soft %d with rfkill_idx=%d and state:%d\n", rf_event.idx,
 			rf_event.type, rf_event.op , rf_event.hard,
-			rf_event.soft);
+			rf_event.soft, rfkill_idx, st_state);
 		if ((rf_event.op == 2) &&
 			(rf_event.idx == rfkill_idx)) {
-			if (rf_event.hard == 1)
+			if (rf_event.hard == 1) {
 				st_state = UNINSTALL_N_TI_WL;
-			else
+				UIM_DBG("UNINSTALL_N_TI_WL");
+			} else {
 				st_state = INSTALL_N_TI_WL;
-
+				UIM_DBG("INSTALL_N_TI_WL");
+			}
 			if (prev_st_state != st_state)
-				st_sig_handler(SIGUSR2);
+				st_uart_config();
 		}
 		goto RE_POLL;
 	}
