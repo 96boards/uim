@@ -46,7 +46,7 @@ int dev_fd;
 
 /* Maintains the state of N_TI_WL line discipline installation*/
 unsigned char st_state = INSTALL_N_TI_WL;
-unsigned char prev_st_state = INSTALL_N_TI_WL;
+unsigned char prev_st_state = UNINSTALL_N_TI_WL;
 
 struct rfkill_event {
 uint32_t idx;
@@ -529,8 +529,8 @@ RE_POLL:
 		UIM_DBG("rf_event: idx %d, type %d, op %d, hard %d, soft %d with rfkill_idx=%d and state:%d\n", rf_event.idx,
 			rf_event.type, rf_event.op , rf_event.hard,
 			rf_event.soft, rfkill_idx, st_state);
-		if ((rf_event.op == 2) &&
-			(rf_event.idx == rfkill_idx)) {
+		if ((rf_event.op == 2) /*&&
+			(rf_event.idx == rfkill_idx)*/) {
 			if (rf_event.hard == 1) {
 				st_state = UNINSTALL_N_TI_WL;
 				UIM_DBG("UNINSTALL_N_TI_WL");
