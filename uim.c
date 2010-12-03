@@ -552,7 +552,7 @@ int change_rfkill_perms(void)
 	char path[64];
 	char buf[16];
 	for (id = 0; id < 50; id++) {
-		snprintf(path, sizeof(path), "/sys/class/rfkill/rfkill%d/type", id);
+		snprintf(path, sizeof(path), "/sys/class/rfkill/rfkill%d/name", id);
 		fd = open(path, O_RDONLY);
 		if (fd < 0) {
 			UIM_DBG("open(%s) failed: %s (%d)\n", path, strerror(errno), errno);
@@ -560,7 +560,7 @@ int change_rfkill_perms(void)
 		}
 		sz = read(fd, &buf, sizeof(buf));
 		close(fd);
-		if (sz >= 9 && memcmp(buf, "bluetooth", 9) == 0) {
+		if (sz >= 9 && memcmp(buf, "Bluetooth", 9) == 0) {
 			UIM_DBG("found bluetooth rfkill entry @ %d\n", id);
 			rfkill_idx = id;
 			break;
