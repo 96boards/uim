@@ -27,6 +27,10 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#ifdef ANDROID
+#include <private/android_filesystem_config.h>
+#include <cutils/log.h>
+#endif
 
 #include "uim.h"
 
@@ -41,19 +45,56 @@ unsigned int uart_baud_rate;
 struct termios ti;
 int line_discipline;
 
+/* BD address as string and a pointer to array of hex bytes */
+char uim_bd_address[17];
+bdaddr_t *bd_addr;
+
 /* File descriptor for the UART device*/
 int dev_fd;
 
 /* Maintains the state of N_TI_WL line discipline installation*/
 unsigned char st_state = INSTALL_N_TI_WL;
-unsigned char prev_st_state = UNINSTALL_N_TI_WL;
+unsigned char prev_st_state = INSTALL_N_TI_WL;
+
+/* from kernel's include/linux/rfkill.h
+ * the header in itself not included because of the
+ * version mismatch of android kernel headers project
+ */
+
+/**
+ * enum rfkill_operation - operation types
+ * @RFKILL_OP_ADD: a device was added
+ * @RFKILL_OP_DEL: a device was removed
+ * @RFKILL_OP_CHANGE: a device's state changed -- userspace changes one device
+ * @RFKILL_OP_CHANGE_ALL: userspace changes all devices (of a type, or all)
+ */
+enum rfkill_operation {
+        RFKILL_OP_ADD = 0,
+        RFKILL_OP_DEL,
+        RFKILL_OP_CHANGE,
+        RFKILL_OP_CHANGE_ALL,
+};
+
+/**
+ * struct rfkill_event - events for userspace on /dev/rfkill
+ * @idx: index of dev rfkill
+ * @type: type of the rfkill struct
+ * @op: operation code
+ * @hard: hard state (0/1)
+ * @soft: soft state (0/1)
+ *
+ * Structure used for userspace communication on /dev/rfkill,
+ * used for events from the kernel and control to the kernel.
+ */
 
 struct rfkill_event {
-uint32_t idx;
-uint8_t  type;
-uint8_t  op;
-uint8_t  soft, hard;
+	uint32_t idx;
+	uint8_t  type;
+	uint8_t  op;
+	uint8_t  soft, hard;
 } __packed;
+
+/* to read events and filter notifications for us */
 struct rfkill_event rf_event;
 int 	rfkill_idx;
 
@@ -79,6 +120,56 @@ void read_firmware_version()
 	printf("\n");
 }
 #endif
+
+/*****************************************************************************/
+#ifdef ANDROID                 /* library for android to do insmod/rmmod  */
+
+/* Function to insert the kernel module into the system*/
+static int insmod(const char *filename, const char *args)
+{
+        void *module;
+        unsigned int size;
+        int ret = -1;
+
+        UIM_START_FUNC();
+
+        module = (void *)load_file(filename, &size);
+        if (!module)
+                return ret;
+
+        ret = init_module(module, size, args);
+        free(module);
+
+        return ret;
+}
+
+/* Function to remove the kernel module from the system*/
+static int rmmod(const char *modname)
+{
+        int ret = -1;
+        int maxtry = MAX_TRY;
+
+        UIM_START_FUNC();
+
+        /* Retry MAX_TRY number of times in case of
+ 	 * failure
+	 */
+        while (maxtry-- > 0) {
+                ret = delete_module(modname, O_NONBLOCK | O_EXCL);
+                if (ret < 0 && errno == EAGAIN)
+                        sleep(1);
+                else
+                        break;
+        }
+
+        /* Failed to remove the module
+	*/
+        if (ret != 0)
+                UIM_ERR("Unable to unload driver module \"%s\": %s",
+                                modname, strerror(errno));
+        return ret;
+}
+#endif /*ANDROID*/
 
 /*****************************************************************************/
 /* Function to read the HCI event from the given file descriptor
@@ -111,9 +202,9 @@ int read_hci_event(int fd, unsigned char *buf, int size)
 			return -1;
 		}
 
-		if (buf[0] == RESP_PREFIX)
+		if (buf[0] == RESP_PREFIX) {
 			break;
-
+		}
 	}
 	count++;
 
@@ -149,7 +240,7 @@ int read_hci_event(int fd, unsigned char *buf, int size)
  */
 static int read_command_complete(int fd, unsigned short opcode)
 {
-	struct command_complete_t resp;
+	command_complete_t resp;
 
 	UIM_START_FUNC();
 
@@ -287,7 +378,9 @@ static int set_custom_baud_rate()
 int st_uart_config()
 {
 	int ldisc, len;
-	struct uim_speed_change_cmd cmd;
+	uim_speed_change_cmd cmd;
+
+	uim_bdaddr_change_cmd addr_cmd;	
 
 	UIM_START_FUNC();
 
@@ -353,6 +446,35 @@ int st_uart_config()
 
 				return -1;
 			}
+ 			/* Set the uim BD address */
+                        if (uim_bd_address[0] != 0) {
+
+                                memset(&addr_cmd, 0, sizeof(addr_cmd));
+                                /* Forming the packet for change BD address command*/
+                                addr_cmd.uart_prefix = HCI_COMMAND_PKT;
+                                addr_cmd.hci_hdr.opcode = WRITE_BD_ADDR_OPCODE;
+                                addr_cmd.hci_hdr.plen = sizeof(bdaddr_t);
+                                memcpy(&addr_cmd.addr, bd_addr, sizeof(bdaddr_t));
+
+                                /* Writing the change BD address command to the UART
+                                 * This will change the change BD address  at the controller
+                                 * side
+                                 */
+                                len = write(dev_fd, &addr_cmd, sizeof(addr_cmd));
+                                if (len < 0) {
+                                        UIM_ERR(" Failed to write BD address command");
+                                        close(dev_fd);
+                                        return -1;
+                                }
+
+                                /* Read the response for the change BD address command */
+                                if (read_command_complete(dev_fd, WRITE_BD_ADDR_OPCODE) < 0) {
+                                        close(dev_fd);
+                                        return -1;
+                                }
+
+                                UIM_VER(" BD address changed to %s", uim_bd_address);
+                        }
 #ifdef UIM_DEBUG
 			read_firmware_version();
 #endif
@@ -369,39 +491,60 @@ int st_uart_config()
 		}
 
 		UIM_DBG(" Installed N_TI_WL Line displine");
-	} else {
+	}
+	else {
 		/* UNINSTALL_N_TI_WL - When the Signal is received from KIM */
 		/* closing UART fd */
-		UIM_DBG(" Uninstalled N_TI_WL Line displine");
 		close(dev_fd);
 	}
 	prev_st_state = st_state;
 	return 0;
 }
+
+#ifdef ANDROID
 int remove_modules()
 {
 	int err = 0;
+        UIM_VER(" Removing gps_drv ");
+        if (rmmod("gps_drv") != 0) {
+                UIM_ERR(" Error removing gps_drv module");
+                err = -1;
+        } else {
+                UIM_DBG(" Removed gps_drv module");
+        }
 
-	UIM_VER(" Removing bt_drv ");
-	if (system("rmmod bt_drv") != 0) {
-		UIM_ERR(" Error removing bt_drv module");
-		err = -1;
-	} else {
-		UIM_DBG(" Removed bt_drv module");
-	}
+        UIM_VER(" Removing fm_drv ");
+        if (rmmod("fm_drv") != 0) {
+                UIM_ERR(" Error removing fm_drv module");
+                err = -1;
+        } else {
+                UIM_DBG(" Removed fm_drv module");
+        }
+        UIM_DBG(" Removed fm_drv module");
 
-	/*Remove the Shared Transport */
-	UIM_VER(" Removing st_drv ");
+        UIM_VER(" Removing bt_drv ");
 
-	if (system("rmmod st_drv") != 0) {
-		UIM_ERR(" Error removing st_drv module");
-		err = -1;
-	} else {
-		UIM_DBG(" Removed st_drv module ");
-	}
+        if (rmmod("bt_drv") != 0) {
+                UIM_ERR(" Error removing bt_drv module");
+                err = -1;
+        } else {
+                UIM_DBG(" Removed bt_drv module");
+        }
+        UIM_DBG(" Removed bt_drv module");
 
+        /*Remove the Shared Transport */
+        UIM_VER(" Removing st_drv ");
+
+        if (rmmod("st_drv") != 0) {
+                UIM_ERR(" Error removing st_drv module");
+                err = -1;
+        } else {
+                UIM_DBG(" Removed st_drv module ");
+        }
+        UIM_DBG(" Removed st_drv module ");
 	return err;
 }
+#endif
 
 int change_rfkill_perms(void)
 {
@@ -409,12 +552,10 @@ int change_rfkill_perms(void)
 	char path[64];
 	char buf[16];
 	for (id = 0; id < 50; id++) {
-		snprintf(path, sizeof(path),
-			"/sys/class/rfkill/rfkill%d/type", id);
+		snprintf(path, sizeof(path), "/sys/class/rfkill/rfkill%d/type", id);
 		fd = open(path, O_RDONLY);
 		if (fd < 0) {
-			UIM_DBG("open(%s) failed: %s (%d)\n",
-				path, strerror(errno), errno);
+			UIM_DBG("open(%s) failed: %s (%d)\n", path, strerror(errno), errno);
 			continue;
 		}
 		sz = read(fd, &buf, sizeof(buf));
@@ -425,9 +566,21 @@ int change_rfkill_perms(void)
 			break;
 		}
 	}
-	if (id == 50)
+	if (id == 50) {
 		return -1;
+	}
 
+#ifdef ANDROID
+	sprintf(path, "/sys/class/rfkill/rfkill%d/state", id);
+	sz = chown(path, AID_BLUETOOTH, AID_BLUETOOTH);
+	if (sz < 0) {
+		UIM_ERR("change mode failed for %s (%d)\n", path, errno);
+		return -1;
+	}
+
+	/*
+	 * bluetooth group's user system needs write permission
+	 */
 	sz = chmod(path, 0660);
 	if (sz < 0) {
 		UIM_ERR("change mode failed for %s (%d)\n", path, errno);
@@ -435,120 +588,220 @@ int change_rfkill_perms(void)
 	}
 	UIM_DBG("changed permissions for %s(%d) \n", path, sz);
 	/* end of change_perms */
-
+#endif
 	return 0;
 }
+
+void *bt_malloc(size_t size)
+{
+        return malloc(size);
+}
+
+/* Function to convert the BD address from ascii to hex value */
+bdaddr_t *strtoba(const char *str)
+{
+        const char *ptr = str;
+        int i;
+
+        uint8_t *ba = bt_malloc(sizeof(bdaddr_t));
+        if (!ba)
+                return NULL;
+
+        for (i = 0; i < 6; i++) {
+                ba[i] = (uint8_t) strtol(ptr, NULL, 16);
+                if (i != 5 && !(ptr = strchr(ptr, ':')))
+                        ptr = ":00:00:00:00:00";
+                ptr++;
+        }
+
+        return (bdaddr_t *) ba;
+}
+
 /*****************************************************************************/
 int main(int argc, char *argv[])
 {
-	int st_fd, err;
-	char buf[20] = { 0 };
-	struct sigaction sa;
+	int st_fd,err;
 	struct stat file_stat;
-	struct utsname name;
 
-	struct pollfd p;
-	sigset_t sigs;
+#ifndef ANDROID
+	char *tist_ko_path;
+	struct utsname name;
+#endif
+	struct pollfd 	p;
 
 	UIM_START_FUNC();
 	err = 0;
 
 	/* Parse the user input */
-	if (argc == 5) {
-		strcpy(uart_dev_name, argv[1]);
-		uart_baud_rate = atoi(argv[2]);
-		uart_flow_control = atoi(argv[3]);
-		line_discipline = atoi(argv[4]);
+        if ((argc == 5) || (argc == 6)) {
+                strcpy(uart_dev_name, argv[1]);
+                uart_baud_rate = atoi(argv[2]);
+                uart_flow_control = atoi(argv[3]);
+                line_discipline = atoi(argv[4]);
 
-		/* Depending upon the baud rate value, differentiate
-		 * the custom baud rate and default baud rate
-		 */
-		switch (uart_baud_rate) {
-			case 115200:
-				UIM_VER(" Baudrate 115200");
-				break;
-			case 9600:
-			case 19200:
-			case 38400:
-			case 57600:
-			case 230400:
-			case 460800:
-			case 500000:
-			case 576000:
-			case 921600:
-			case 1000000:
-			case 1152000:
-			case 1500000:
-			case 2000000:
-			case 2500000:
-			case 3000000:
-			case 3500000:
-			case 3686400:
-			case 4000000:
-				cust_baud_rate = uart_baud_rate;
-				UIM_VER(" Baudrate %d", cust_baud_rate);
-				break;
-			default:
-				UIM_ERR(" Inavalid Baud Rate");
-				break;
-		}
-	} else {
-		UIM_ERR(" Invalid arguements");
-		UIM_ERR(" Usage: uim [Uart device] [Baud rate] [Flow control] [Line discipline]");
-		return -1;
-	}
+                /* Depending upon the baud rate value, differentiate
+                 * the custom baud rate and default baud rate
+                 */
+                switch (uart_baud_rate) {
+                        case 115200:
+                                UIM_VER(" Baudrate 115200");
+                                break;
+                        case 9600:
+                        case 19200:
+                        case 38400:
+                        case 57600:
+                        case 230400:
+                        case 460800:
+                        case 500000:
+                        case 576000:
+                        case 921600:
+                        case 1000000:
+                        case 1152000:
+                        case 1500000:
+                        case 2000000:
+                        case 2500000:
+                        case 3000000:
+                        case 3500000:
+                        case 3686400:
+                        case 4000000:
+                                cust_baud_rate = uart_baud_rate;
+                                UIM_VER(" Baudrate %d", cust_baud_rate);
+                                break;
+                        default:
+                                UIM_ERR(" Inavalid Baud Rate");
+                                break;
+                }
 
+                memset(&uim_bd_address, 0, sizeof(uim_bd_address));
+        } else {
+                UIM_ERR(" Invalid arguements");
+                UIM_ERR(" Usage: uim [Uart device] [Baud rate] [Flow control] [Line discipline] <bd address>");
+                return -1;
+        }
+
+        if (argc == 6) {
+                /* BD address passed as string in xx:xx:xx:xx:xx:xx format */
+                strcpy(uim_bd_address, argv[5]);
+                bd_addr = strtoba(uim_bd_address);
+        }
+#ifndef ANDROID
 	if (uname (&name) == -1) {
 	   UIM_ERR("cannot get kernel release name");
 	   return -1;
 	}
+#else  /* if ANDROID */
 
+        if (0 == lstat("/st_drv.ko", &file_stat)) {
+                if (insmod("/st_drv.ko", "") < 0) {
+                        UIM_ERR(" Error inserting st_drv module");
+                        return -1;
+                } else {
+                        UIM_DBG(" Inserted st_drv module");
+                }
+        } else {
+                if (0 == lstat("/dev/rfkill", &file_stat)) {
+                        UIM_DBG("ST built into the kernel ?");
+                } else {
+                        UIM_ERR("BT/FM/GPS would be unavailable on system");
+                        UIM_ERR(" rfkill device '/dev/rfkill' not found ");
+                        return -1;
+                }
+        }
+
+	if (change_rfkill_perms() < 0) {
+		/* possible error condition */
+		UIM_ERR("rfkill not enabled in st_drv - BT on from UI might fail\n");
+	}
+
+        if (0 == lstat("/bt_drv.ko", &file_stat)) {
+                if (insmod("/bt_drv.ko", "") < 0) {
+                        UIM_ERR(" Error inserting bt_drv module, NO BT? ");
+                } else {
+                        UIM_DBG(" Inserted bt_drv module");
+                }
+        } else {
+                UIM_DBG("BT driver module un-available... ");
+                UIM_DBG("BT driver built into the kernel ?");
+        }
+
+        if (0 == lstat("/fm_drv.ko", &file_stat)) {
+                if (insmod("/fm_drv.ko", "") < 0) {
+                        UIM_ERR(" Error inserting fm_drv module, NO FM? ");
+                } else {
+                        UIM_DBG(" Inserted fm_drv module");
+                }
+        } else {
+                UIM_DBG("FM driver module un-available... ");
+                UIM_DBG("FM driver built into the kernel ?");
+        }
+
+        if (0 == lstat("/gps_drv.ko", &file_stat)) {
+                if (insmod("/gps_drv.ko", "") < 0) {
+                        UIM_ERR(" Error inserting gps_drv module, NO GPS? ");
+                } else {
+                        UIM_DBG(" Inserted gps_drv module");
+                }
+        } else {
+                UIM_DBG("GPS driver module un-available... ");
+                UIM_DBG("GPS driver built into the kernel ?");
+        }
+
+        if (chmod("/dev/tifm", 0666) < 0) {
+                UIM_ERR("unable to chmod /dev/tifm");
+        }
+#endif
+	/* rfkill device's open/poll/read */
 	st_fd = open("/dev/rfkill", O_RDONLY);
 
 	p.fd = st_fd;
 	p.events = POLLERR | POLLHUP | POLLOUT | POLLIN;
 
-	sigfillset(&sigs);
-	sigdelset(&sigs, SIGCHLD);
-	sigdelset(&sigs, SIGPIPE);
-	sigdelset(&sigs, SIGTERM);
-	sigdelset(&sigs, SIGINT);
-	sigdelset(&sigs, SIGHUP);
-
 RE_POLL:
 	while (!exiting) {
 		p.revents = 0;
-		err = ppoll(&p, 1, NULL, &sigs);
+		err = poll(&p, 1, -1);
 		if (err < 0 && errno == EINTR)
 			continue;
-		if (err)
-			break;
+                if (err)
+                        break;
 	}
-	if (!exiting) {
+	if (!exiting)
+	{
 		err = read(st_fd, &rf_event, sizeof(rf_event));
-		UIM_DBG("rf_event: idx %d, type %d, op %d, hard %d, soft %d with rfkill_idx=%d and state:%d\n", rf_event.idx,
-			rf_event.type, rf_event.op , rf_event.hard,
-			rf_event.soft, rfkill_idx, st_state);
-		if ((rf_event.op == 2) /*&&
-			(rf_event.idx == rfkill_idx)*/) {
-			if (rf_event.hard == 1) {
+		UIM_DBG("rf_event: %d, %d, %d, %d, %d\n", rf_event.idx,
+			rf_event.type, rf_event.op ,rf_event.hard,
+			rf_event.soft);
+		/* Since non-android/ubuntu solution for UIM doesn't insert
+		 * modules, the rfkill entry relevant to TI ST can only be known
+		 * by listening onto each of the RFKILL_OP_ADD event
+		 */
+#ifndef ANDROID
+		if (rf_event.op == RFKILL_OP_ADD) {
+			UIM_DBG("RFKILL_OP_ADD received\n");
+			change_rfkill_perms();
+			goto RE_POLL;
+		}
+#endif
+		if ((rf_event.op == RFKILL_OP_CHANGE) &&
+			(rf_event.idx == rfkill_idx)) {
+			if (rf_event.hard == 1)
 				st_state = UNINSTALL_N_TI_WL;
-				UIM_DBG("UNINSTALL_N_TI_WL");
-			} else {
+			else
 				st_state = INSTALL_N_TI_WL;
-				UIM_DBG("INSTALL_N_TI_WL");
-			}
+
 			if (prev_st_state != st_state)
 				st_uart_config();
 		}
 		goto RE_POLL;
 	}
 
-	if (remove_modules() < 0) {
+#ifdef ANDROID
+	if(remove_modules() < 0) {
 		UIM_ERR(" Error removing modules ");
 		close(st_fd);
 		return -1;
 	}
+#endif
 
 	close(st_fd);
 	return 0;

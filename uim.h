@@ -24,18 +24,14 @@
 #define  BOTHER		0x00001000
 #define  ARM_NCCS	19
 
-#ifndef TCGETS2
-#define TCGETS2      _IOR('T', 0x2A, struct termios2)
-#endif
-
-#ifndef TCSETS2
-#define TCSETS2      _IOW('T', 0x2B, struct termios2)
-#endif
+#define TCGETS2      _IOR('T',0x2A, struct termios2)
+#define TCSETS2      _IOW('T',0x2B, struct termios2)
 
 /*HCI Command and Event information*/
-#define HCI_HDR_OPCODE  0xff36
-#define RESP_PREFIX	0x04
-#define MAX_TRY		10
+#define HCI_HDR_OPCODE		0xff36
+#define WRITE_BD_ADDR_OPCODE    0xFC06
+#define RESP_PREFIX		0x04
+#define MAX_TRY			10
 
 /* HCI Packet types */
 #define HCI_COMMAND_PKT		0x01
@@ -43,6 +39,7 @@
 
 /* HCI command macros*/
 #define HCI_EVENT_HDR_SIZE      2
+#define HCI_COMMAND_HDR_SIZE	3
 #define HCI_COMMAND_HDR_SIZE    3
 
 /* HCI event macros*/
@@ -51,15 +48,34 @@
 #define EVT_CMD_COMPLETE	0x0E
 #define EVT_CMD_STATUS		0x0F
 
+
 #define VERBOSE
+#ifdef ANDROID
+#define LOG_TAG "uim-rfkill: "
+#define UIM_ERR(fmt, arg...)  LOGE("uim:"fmt"\n" , ##arg)
+#if defined(UIM_DEBUG)          /* limited debug messages */
+#define UIM_START_FUNC()      LOGE("uim: Inside %s", __FUNCTION__)
+#define UIM_DBG(fmt, arg...)  LOGE("uim:"fmt"\n" , ## arg)
+#define UIM_VER(fmt, arg...)
+#elif defined(VERBOSE)          /* very verbose */
+#define UIM_START_FUNC()      LOGE("uim: Inside %s", __FUNCTION__)
+#define UIM_DBG(fmt, arg...)  LOGE("uim:"fmt"\n" , ## arg)
+#define UIM_VER(fmt, arg...)  LOGE("uim:"fmt"\n" , ## arg)
+#else /* error msgs only */
+#define UIM_START_FUNC()
+#define UIM_DBG(fmt, arg...)
+#define UIM_VER(fmt, arg...)
+#endif
+#endif  /* ANDROID */
+
 /*Debug logs*/
 #define UIM_ERR(fmt, arg...)  printf("uim:"fmt"\n" , ##arg)
 #if defined(UIM_DEBUG)		/* limited debug messages */
-#define UIM_START_FUNC()      printf("uim: Inside %s", __func__)
+#define UIM_START_FUNC()      printf("uim: Inside %s", __FUNCTION__)
 #define UIM_DBG(fmt, arg...)  printf("uim:"fmt"\n" , ## arg)
 #define UIM_VER(fmt, arg...)
 #elif defined(VERBOSE)		/* very verbose */
-#define UIM_START_FUNC()      printf("uim: Inside %s", __func__)
+#define UIM_START_FUNC()      printf("uim: Inside %s", __FUNCTION__)
 #define UIM_DBG(fmt, arg...)  printf("uim:"fmt"\n" , ## arg)
 #define UIM_VER(fmt, arg...)  printf("uim:"fmt"\n" , ## arg)
 #else /* error msgs only */
@@ -81,45 +97,57 @@ struct termios2 {
 };
 
 /* HCI command header*/
-struct hci_command_hdr {
-	uint16_t        opcode;         /* OCF & OGF */
-	uint8_t         plen;
-} __attribute__ ((packed));
+typedef struct {
+        uint16_t        opcode;         /* OCF & OGF */
+        uint8_t         plen;
+} __attribute__ ((packed))      hci_command_hdr;
 
 /* HCI event header*/
-struct hci_event_hdr {
-	uint8_t         evt;
-	uint8_t         plen;
-} __attribute__ ((packed));
+typedef struct {
+        uint8_t         evt;
+        uint8_t         plen;
+} __attribute__ ((packed))      hci_event_hdr;
 
 /* HCI command complete event*/
-struct evt_cmd_complete {
-	uint8_t         ncmd;
-	uint16_t        opcode;
-} __attribute__ ((packed));
+typedef struct {
+        uint8_t         ncmd;
+        uint16_t        opcode;
+} __attribute__ ((packed)) evt_cmd_complete;
 
 /* HCI event status*/
-struct evt_cmd_status {
-	uint8_t         status;
-	uint8_t         ncmd;
-	uint16_t        opcode;
-} __attribute__ ((packed));
+typedef struct {
+        uint8_t         status;
+        uint8_t         ncmd;
+        uint16_t        opcode;
+} __attribute__ ((packed)) evt_cmd_status;
 
 /* HCI Event structure to set the cusrom baud rate*/
-struct command_complete_t {
+typedef struct {
 	uint8_t uart_prefix;
-	struct hci_event_hdr hci_hdr;
-	struct evt_cmd_complete cmd_complete;
+	hci_event_hdr hci_hdr;
+	evt_cmd_complete cmd_complete;
 	uint8_t status;
 	uint8_t data[16];
-} __attribute__ ((packed));
+} __attribute__ ((packed)) command_complete_t;
 
 /* HCI Command structure to set the cusrom baud rate*/
-struct uim_speed_change_cmd {
+typedef struct {
 	uint8_t uart_prefix;
-	struct hci_command_hdr hci_hdr;
+	hci_command_hdr hci_hdr;
 	uint32_t speed;
-} __attribute__ ((packed));
+} __attribute__ ((packed)) uim_speed_change_cmd;
+
+/* BD address structure to set the uim BD address*/
+typedef struct {
+        unsigned char b[6];
+} __attribute__((packed)) bdaddr_t;
+
+/* HCI Command structure to set the uim BD address*/
+typedef struct {
+        uint8_t uart_prefix;
+        hci_command_hdr hci_hdr;
+        bdaddr_t addr;
+} __attribute__ ((packed)) uim_bdaddr_change_cmd;\
 
 /* Signal received from KIM will install line discipline at first,
  * the next signal received from KIM will un-install the
