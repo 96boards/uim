@@ -24,8 +24,12 @@
 #define  BOTHER		0x00001000
 #define  ARM_NCCS	19
 
+#ifndef TCGETS2
 #define TCGETS2      _IOR('T',0x2A, struct termios2)
+#endif
+#ifndef TCSETS2
 #define TCSETS2      _IOW('T',0x2B, struct termios2)
+#endif
 
 /*HCI Command and Event information*/
 #define HCI_HDR_OPCODE		0xff36
