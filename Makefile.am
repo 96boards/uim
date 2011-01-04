@@ -1,7 +1,0 @@
-AUTOMAKE_OPTIONS = subdir-objects
-ACLOCAL_AMFLAGS = ${ACLOCAL_FLAGS}
-
-bin_PROGRAMS = uim
-uim_SOURCES = uim.c
-
-

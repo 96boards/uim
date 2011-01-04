@@ -27,6 +27,10 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+
+#include <unistd.h>
+#include <time.h>
+
 #ifdef ANDROID
 #include <private/android_filesystem_config.h>
 #include <cutils/log.h>
@@ -290,7 +294,7 @@ static int read_command_complete(int fd, unsigned short opcode)
  * by making a call to this function.This function is also called before
  * making a call to set the custom baud rate
  */
-static int set_baud_rate()
+static int set_baud_rate(void)
 {
 	UIM_START_FUNC();
 
@@ -330,7 +334,7 @@ static int set_baud_rate()
  * The UART baud rate has already been
  * set to default value 115200 before calling this function.
  * The baud rate is then changed to custom baud rate by this function*/
-static int set_custom_baud_rate()
+static int set_custom_baud_rate(void)
 {
 	UIM_START_FUNC();
 
@@ -375,7 +379,7 @@ static int set_custom_baud_rate()
  * After receiving the indication from rfkill subsystem, configure the
  * baud rate, flow control and Install the N_TI_WL line discipline
  */
-int st_uart_config()
+int st_uart_config(void)
 {
 	int ldisc, len;
 	uim_speed_change_cmd cmd;
@@ -502,7 +506,7 @@ int st_uart_config()
 }
 
 #ifdef ANDROID
-int remove_modules()
+int remove_modules(void)
 {
 	int err = 0;
         UIM_VER(" Removing gps_drv ");
@@ -621,10 +625,10 @@ bdaddr_t *strtoba(const char *str)
 int main(int argc, char *argv[])
 {
 	int st_fd,err;
+#ifdef ANDROID
 	struct stat file_stat;
-
+#endif
 #ifndef ANDROID
-	char *tist_ko_path;
 	struct utsname name;
 #endif
 	struct pollfd 	p;
@@ -681,7 +685,7 @@ int main(int argc, char *argv[])
 
         if (argc == 6) {
                 /* BD address passed as string in xx:xx:xx:xx:xx:xx format */
-                strcpy(uim_bd_address, argv[5]);
+		strncpy(uim_bd_address, argv[5], sizeof(uim_bd_address));
                 bd_addr = strtoba(uim_bd_address);
         }
 #ifndef ANDROID
