@@ -38,6 +38,11 @@ static int exiting;
 static int line_discipline;
 static int dev_fd;
 
+static char install_sysfs_entry[48];
+static char dev_name_sysfs[48];
+static char baud_rate_sysfs[48];
+static char flow_cntrl_sysfs[48];
+
 /* BD address as string and a pointer to array of hex bytes */
 char uim_bd_address[BD_ADDR_LEN];
 bdaddr_t *bd_addr;
@@ -455,9 +460,17 @@ bdaddr_t *strtoba(const char *str)
         return (bdaddr_t *) ba;
 }
 
+void usage(void)
+{
+	UIM_ERR("Invalid arguments");
+	UIM_ERR("Usage: uim [ -f <path-to-sysfs-kim> ] [ -b <bd address XX:XX:XX:XX:XX:XX> ]");
+}
+
 /*****************************************************************************/
 int main(int argc, char *argv[])
 {
+	int opt;
+	char *arg_kim_path = NULL, *arg_bd_addr = NULL, *temp_path = KIM_SYSFS_BASE;
 	int st_fd, err;
 	unsigned char install;
 	struct pollfd 	p;
@@ -466,18 +479,50 @@ int main(int argc, char *argv[])
 	err = 0;
 
 	/* Parse the user input */
-	if ((argc > 2)) {
-		UIM_ERR("Invalid arguements");
-		UIM_ERR("Usage: uim <bd address>");
-		return -1;
+	while ((opt = getopt (argc, argv, "f:b:")) != -1) {
+		switch (opt) {
+			case 'f':
+				arg_kim_path = optarg;
+				break;
+			case 'b':
+				arg_bd_addr = optarg;
+				break;
+			default:
+				usage();
+				return -1;
+		}
 	}
-	if (argc == 2) {
-		if (strlen(argv[2]) != BD_ADDR_LEN) {
-			UIM_ERR("Usage: uim XX:XX:XX:XX:XX:XX");
+
+	if (arg_kim_path != NULL) {
+		temp_path = arg_kim_path;
+		if( strlen(temp_path) > (sizeof(install_sysfs_entry)-10) ) {
+			UIM_ERR("Path to sysfs node too long");
 			return -1;
 		}
+	}
+	strcpy(install_sysfs_entry, temp_path);
+	strcpy(dev_name_sysfs, temp_path);
+	strcpy(baud_rate_sysfs, temp_path);
+	strcpy(flow_cntrl_sysfs, temp_path);
+
+	strcat(install_sysfs_entry, "/install");
+	strcat(dev_name_sysfs, "/dev_name");
+	strcat(baud_rate_sysfs, "/baud_rate");
+	strcat(flow_cntrl_sysfs, "/flow_cntrl");
+
+	UIM_DBG("install = %s", install_sysfs_entry);
+	UIM_DBG("dev_name = %s", dev_name_sysfs);
+	UIM_DBG("baud_rate = %s", baud_rate_sysfs);
+	UIM_DBG("flow_cntrl = %s", flow_cntrl_sysfs);
+
+	if (arg_bd_addr != NULL) {
+		if (strlen(arg_bd_addr) != BD_ADDR_LEN) {
+			usage();
+			return -1;
+		}
+		UIM_DBG("Address = %s", arg_bd_addr);
 		/* BD address passed as string in xx:xx:xx:xx:xx:xx format */
-		strncpy(uim_bd_address, argv[2], sizeof(uim_bd_address));
+		strncpy(uim_bd_address, arg_bd_addr, sizeof(uim_bd_address));
 		bd_addr = strtoba(uim_bd_address);
 	}
 
