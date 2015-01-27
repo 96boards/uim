@@ -280,7 +280,7 @@ int st_uart_config(unsigned char install)
 	unsigned char buf[UART_DEV_NAME_LEN];
 	uim_speed_change_cmd cmd;
 	char uart_dev_name[UART_DEV_NAME_LEN];
-	long cust_baud_rate;
+	unsigned int cust_baud_rate;
 
 	uim_bdaddr_change_cmd addr_cmd;
 
@@ -315,7 +315,7 @@ int st_uart_config(unsigned char install)
 			return len;
 		}
 		close(fd);
-		sscanf((const char*)buf, "%ld", &cust_baud_rate);
+		sscanf((const char*)buf, "%d", &cust_baud_rate);
 
 		memset(buf, 0, UART_DEV_NAME_LEN);
 		fd = open(FLOW_CTRL_SYSFS, O_RDONLY);
@@ -355,11 +355,11 @@ int st_uart_config(unsigned char install)
 		/* Set only the custom baud rate */
 		if (cust_baud_rate != 115200) {
 
-			UIM_VER("Setting speed to %ld", cust_baud_rate);
+			UIM_VER("Setting speed to %d", cust_baud_rate);
 			/* Forming the packet for Change speed command */
 			cmd.uart_prefix = HCI_COMMAND_PKT;
 			cmd.hci_hdr.opcode = HCI_HDR_OPCODE;
-			cmd.hci_hdr.plen = sizeof(unsigned long);
+			cmd.hci_hdr.plen = sizeof(unsigned int);
 			cmd.speed = cust_baud_rate;
 
 			/* Writing the change speed command to the UART
@@ -379,7 +379,7 @@ int st_uart_config(unsigned char install)
 				return -1;
 			}
 
-			UIM_VER("Speed changing to %ld, %d", cust_baud_rate, flow_ctrl);
+			UIM_VER("Speed changing to %d, %d", cust_baud_rate, flow_ctrl);
 			/* Set the actual custom baud rate at the host side */
 			if (set_custom_baud_rate(dev_fd, cust_baud_rate, flow_ctrl) < 0) {
 				UIM_ERR("set_custom_baud_rate() failed");
