@@ -1,0 +1,6 @@
+[Unit]
+Description=User Mode Init Manager for TI shared transport
+
+[Service]
+ExecStartPre=/sbin/modprobe -q btwilink || true
+ExecStart=/usr/sbin/uim -f /sys/devices/kim
