@@ -472,6 +472,7 @@ int main(int argc, char *argv[])
 	int opt;
 	char *arg_kim_path = NULL, *arg_bd_addr = NULL, *temp_path = KIM_SYSFS_BASE;
 	int st_fd, err;
+	struct stat kim_stat;
 	unsigned char install;
 	struct pollfd 	p;
 
@@ -494,12 +495,23 @@ int main(int argc, char *argv[])
 	}
 
 	if (arg_kim_path != NULL) {
-		temp_path = arg_kim_path;
-		if( strlen(temp_path) > (sizeof(install_sysfs_entry)-10) ) {
+		if( strlen(arg_kim_path) > (sizeof(install_sysfs_entry)-10) ) {
 			UIM_ERR("Path to sysfs node too long");
 			return -1;
 		}
+		if (stat(arg_kim_path, &kim_stat) == 0) {
+			temp_path = arg_kim_path;
+		} else {
+			UIM_VER("Alternative sysfs node %s not found, using default",
+						arg_kim_path);
+		}
 	}
+
+	if (stat(temp_path, &kim_stat) == -1) {
+		UIM_ERR("Sysfs node %s not found", temp_path);
+		return -1;
+	}
+
 	strcpy(install_sysfs_entry, temp_path);
 	strcpy(dev_name_sysfs, temp_path);
 	strcpy(baud_rate_sysfs, temp_path);
